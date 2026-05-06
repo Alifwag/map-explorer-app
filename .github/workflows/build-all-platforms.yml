@@ -1,0 +1,333 @@
+name: 🚀 Build MapExplorer - All Platforms
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Select platform to build'
+        type: choice
+        options:
+          - all
+          - android
+          - ios
+          - macos
+          - windows
+          - linux
+          - web
+        default: 'all'
+
+permissions:
+  contents: write
+  packages: write
+  actions: write
+
+jobs:
+  # ============================================
+  # 🌐 WEB BUILD (PWA)
+  # ============================================
+  build-web:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == 'web' }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci || npm install
+        
+      - name: Build web app
+        run: npm run build || npx vite build
+        env:
+          CI: false
+          
+      - name: Generate PWA assets
+        run: |
+          mkdir -p dist/pwa
+          cp public/manifest.json dist/ 2>/dev/null || true
+          cp public/service-worker.js dist/ 2>/dev/null || true
+          cp public/pwa-install.js dist/ 2>/dev/null || true
+          
+      - name: Upload web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-explorer-web
+          path: |
+            dist/
+            build/
+            public/
+          retention-days: 30
+          
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          cname: mapexplorer.app
+
+  # ============================================
+  # 📱 ANDROID BUILD (APK + AAB)
+  # ============================================
+  build-android:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == 'android' }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          target: 'google_apis'
+          arch: 'x86_64'
+          
+      - name: Install Capacitor
+        run: |
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npm install @capacitor/geolocation @capacitor/push-notifications
+          npx cap init MapExplorer com.mapexplorer.app --web-dir=dist
+          npx cap add android
+          
+      - name: Build web assets
+        run: npm run build || npx vite build
+        env:
+          CI: false
+          
+      - name: Sync Capacitor
+        run: npx cap sync android
+        
+      - name: Build APK (Debug)
+        run: |
+          cd android
+          ./gradlew assembleDebug
+          
+      - name: Build APK (Release)
+        run: |
+          cd android
+          ./gradlew assembleRelease
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          
+      - name: Build AAB (Android App Bundle)
+        run: |
+          cd android
+          ./gradlew bundleRelease
+          
+      - name: Sign APK
+        uses: r0adkll/sign-android-release@v1
+        with:
+          releaseDirectory: android/app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE }}
+          alias: ${{ secrets.ANDROID_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-explorer-android
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+  # ============================================
+  # 🍎 iOS BUILD
+  # ============================================
+  build-ios:
+    runs-on: macos-latest
+    if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios' }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.4'
+          
+      - name: Install Capacitor
+        run: |
+          npm install @capacitor/core @capacitor/cli @capacitor/ios
+          npx cap init MapExplorer com.mapexplorer.app --web-dir=dist
+          npx cap add ios
+          
+      - name: Build web assets
+        run: npm run build || npx vite build
+        env:
+          CI: false
+          
+      - name: Sync Capacitor
+        run: npx cap sync ios
+        
+      - name: Build iOS
+        run: |
+          cd ios/App
+          xcodebuild \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -sdk iphoneos \
+            -configuration Release \
+            -archivePath $PWD/build/App.xcarchive \
+            archive
+          xcodebuild \
+            -exportArchive \
+            -archivePath $PWD/build/App.xcarchive \
+            -exportOptionsPlist exportOptions.plist \
+            -exportPath $PWD/build/ipa
+        env:
+          DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+          
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-explorer-ios
+          path: ios/App/build/ipa/*.ipa
+          retention-days: 30
+
+  # ============================================
+  # 🖥 macOS BUILD
+  # ============================================
+  build-macos:
+    runs-on: macos-latest
+    if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos' }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install Electron Builder
+        run: |
+          npm install --save-dev electron electron-builder
+          
+      - name: Build web assets
+        run: npm run build || npx vite build
+        env:
+          CI: false
+          
+      - name: Build macOS DMG
+        run: |
+          npx electron-builder build --mac --x64 --arm64
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-explorer-macos
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          retention-days: 30
+
+  # ============================================
+  # 🪟 WINDOWS BUILD
+  # ============================================
+  build-windows:
+    runs-on: windows-latest
+    if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows' }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install Electron Builder
+        run: npm install --save-dev electron electron-builder
+        
+      - name: Build web assets
+        run: npm run build || npx vite build
+        env:
+          CI: false
+          
+      - name: Build Windows EXE + MSI
+        run: npx electron-builder build --win --x64 --ia32
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-explorer-windows
+          path: |
+            dist/*.exe
+            dist/*.msi
+          retention-days: 30
+
+  # ============================================
+  # 🐧 LINUX BUILD
+  # ============================================
+  build-linux:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == 'linux' }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm snapcraft
+          
+      - name: Install Electron Builder
+        run: npm install --save-dev electron electron-builder
+        
+      - name: Build web assets
+        run: npm run build || npx vite build
+        env:
+          CI: false
+          
+      - name: Build Linux (AppImage + deb + rpm + snap)
+        run: npx electron-builder build --linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-explorer-linux
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+            dist/*.snap
+          retention-days: 30
