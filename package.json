@@ -2,29 +2,33 @@
   "name": "map-explorer-app",
   "version": "1.0.0",
   "private": true,
-  "dependencies": {
-    "axios": "^1.6.0",
-    "framer-motion": "^10.16.0",
-    "leaflet": "^1.9.4",
-    "leaflet-routing-machine": "^3.2.12",
-    "lucide-react": "^0.290.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-leaflet": "^4.2.1",
-    "zustand": "^4.4.1"
-  },
+  "homepage": "https://alifwag.github.io/map-explorer-app",
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
-    "test": "react-scripts test"
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1",
+    "leaflet": "^1.9.4",
+    "react-leaflet": "^4.2.1",
+    "axios": "^1.6.0",
+    "framer-motion": "^10.16.0",
+    "lucide-react": "^0.290.0",
+    "zustand": "^4.4.0"
   },
   "devDependencies": {
-    "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.1",
-    "eslint": "^10.3.0",
-    "husky": "^9.1.7",
-    "lint-staged": "^17.0.2",
-    "prettier": "^3.8.3"
+    "@capacitor/core": "^5.0.0",
+    "@capacitor/cli": "^5.0.0",
+    "@capacitor/android": "^5.0.0",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "browserslist": {
+    "production": [">0.2%", "not dead", "not op_mini all"],
+    "development": ["last 1 chrome version"]
   }
 }

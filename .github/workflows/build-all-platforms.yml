@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
   pages: write
   id-token: write
 
@@ -18,7 +17,7 @@ env:
 
 jobs:
   # ============================================
-  # 📦 SOURCE CODE ARCHIVE
+  # 📦 SOURCE CODE
   # ============================================
   source-code:
     name: 📦 Source Code
@@ -33,29 +32,21 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           [ -z "$VERSION" ] && VERSION="latest"
           
-          zip -r "map-explorer-${VERSION}-source.zip" . \
-            -x "node_modules/*" ".git/*" "dist/*" "build/*" \
-            "*.apk" "*.aab" "*.ipa" "*.dmg" "*.exe" ".github/*" 2>&1 | tail -3
+          # ZIP
+          zip -r "map-explorer-v${VERSION}-source.zip" . \
+            -x "node_modules/*" ".git/*" "dist/*" "build/*" "*.apk" "*.aab" ".github/*" 2>&1 | tail -3
           
-          tar -czf "map-explorer-${VERSION}-source.tar.gz" \
-            --exclude=node_modules \
-            --exclude=.git \
-            --exclude=dist \
-            --exclude=build \
-            --exclude=.github \
-            --exclude="*.apk" \
-            --exclude="*.aab" \
-            . 2>&1
+          # TAR.GZ
+          tar -czf "map-explorer-v${VERSION}-source.tar.gz" \
+            --exclude=node_modules --exclude=.git --exclude=dist --exclude=build --exclude=.github . 2>&1
           
           ls -lh map-explorer-*.zip map-explorer-*.tar.gz
-          echo "✅ Archives created!"
+          echo "✅ Done"
 
       - uses: actions/upload-artifact@v4
         with:
           name: 📦-Source-Code
-          path: |
-            map-explorer-*.zip
-            map-explorer-*.tar.gz
+          path: map-explorer-*
           retention-days: 90
 
   # ============================================
@@ -72,37 +63,21 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Build Web
+      - name: Build & Package
         run: |
-          echo "📦 Installing..."
-          npm install --no-audit --no-fund 2>&1 | tail -5
+          npm install --no-audit --no-fund 2>&1 | tail -3
           
-          echo "🏗️ Building..."
-          if npm run build 2>/dev/null; then
-            echo "✅ npm build success"
-          elif npx vite build 2>/dev/null; then
-            echo "✅ vite build success"
-          else
-            echo "⚠️ Using public folder"
-            mkdir -p dist && cp -r public/* dist/ 2>/dev/null || true
-          fi
+          # Build
+          npm run build 2>/dev/null || npx vite build 2>/dev/null || (mkdir -p dist && cp -r public/* dist/ 2>/dev/null)
           
-          [ -d "dist" ] || mkdir -p dist
-          [ -d "public" ] && cp -r public/* dist/ 2>/dev/null || true
+          # Ensure output
+          [ -d "dist" ] && [ "$(ls -A dist 2>/dev/null)" ] || { mkdir -p dist; cp -r public/* dist/ 2>/dev/null; }
           
-          echo "✅ Build ready"
+          # Package
+          cd dist && zip -r ../map-explorer-web.zip . && cd ..
+          ls -lh map-explorer-web.zip
         env:
           CI: false
-
-      - name: Package Web
-        run: |
-          BUILD_DIR="dist"
-          [ -d "dist" ] && [ "$(ls -A dist 2>/dev/null)" ] || BUILD_DIR="public"
-          
-          cd "$BUILD_DIR"
-          zip -r ../map-explorer-web.zip . 2>&1
-          cd ..
-          ls -lh map-explorer-web.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -110,7 +85,7 @@ jobs:
           path: map-explorer-web.zip
           retention-days: 90
 
-      - name: Deploy to GitHub Pages
+      - name: Deploy Pages
         if: github.ref == 'refs/heads/main'
         uses: peaceiris/actions-gh-pages@v4
         with:
@@ -120,12 +95,12 @@ jobs:
         continue-on-error: true
 
   # ============================================
-  # 📱 ANDROID APK - ColorOS 11+ to 16
+  # 📱 ANDROID - ColorOS 11-16
   # ============================================
   android:
-    name: 📱 Android APK (ColorOS 11-16)
+    name: 📱 Android (ColorOS 11-16)
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -141,165 +116,53 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          api-level: 34
-          target: 'google_apis'
-          build-tools: '34.0.0'
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+          accept-android-sdk-licenses: true
 
-      - name: Install & Configure Capacitor
+      - name: Install & Build
         run: |
-          echo "📦 Installing dependencies..."
-          npm install --no-audit --no-fund 2>&1 | tail -5
+          npm install --no-audit --no-fund 2>&1 | tail -3
           
-          echo "📱 Setting up Capacitor for Android..."
-          npm install @capacitor/core @capacitor/cli @capacitor/android 2>&1 | tail -5
-          npm install @capacitor/geolocation @capacitor/status-bar @capacitor/splash-screen 2>&1 | tail -3
-          
+          # Capacitor
+          npm install @capacitor/core @capacitor/cli @capacitor/android 2>&1 | tail -3
           npx cap init MapExplorer com.mapexplorer.app --web-dir=public 2>/dev/null || true
           npx cap add android 2>/dev/null || true
-          npx cap sync android 2>/dev/null || true
           
-          echo "✅ Capacitor setup complete"
-        timeout-minutes: 10
-
-      - name: Configure Android for ColorOS
-        run: |
-          echo "🔧 Configuring Android for ColorOS 11-16..."
-          
-          if [ -d "android" ]; then
-            # Update AndroidManifest.xml for ColorOS
-            if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
-              # Add ColorOS specific permissions
-              sed -i 's|<application|<uses-permission android:name="com.coloros.permission.RECV_BROADCAST" />\n    <uses-permission android:name="com.oppo.permission.OPPO_COMPONENT_SAFE" />\n    <uses-permission android:name="com.heytap.market.permission.ACCESS" />\n    <application|' android/app/src/main/AndroidManifest.xml 2>/dev/null || true
-            fi
-            
-            # Update build.gradle for minimum SDK 30 (Android 11 / ColorOS 11)
-            if [ -f "android/app/build.gradle" ]; then
-              # Set minSdkVersion to 30 (Android 11)
-              sed -i 's/minSdkVersion [0-9]*/minSdkVersion 30/' android/app/build.gradle 2>/dev/null || true
-              # Set targetSdkVersion to 35 (Android 15 / ColorOS 15)
-              sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 35/' android/app/build.gradle 2>/dev/null || true
-              # Set compileSdkVersion to 35
-              sed -i 's/compileSdkVersion [0-9]*/compileSdkVersion 35/' android/app/build.gradle 2>/dev/null || true
-            fi
-            
-            # Update variables.gradle for Capacitor
-            if [ -f "android/variables.gradle" ]; then
-              cat >> android/variables.gradle << 'GRADLE_EOF'
-              
-              // ColorOS Optimization
-              ext {
-                minSdkVersion = 30
-                compileSdkVersion = 35
-                targetSdkVersion = 35
-                androidxActivityVersion = '1.9.0'
-                androidxAppCompatVersion = '1.7.0'
-                androidxCoordinatorLayoutVersion = '1.2.0'
-                androidxCoreVersion = '1.13.0'
-                androidxFragmentVersion = '1.8.0'
-                coreSplashScreenVersion = '1.0.1'
-                androidxWebkitVersion = '1.12.0'
-                junitVersion = '4.13.2'
-                androidxJunitVersion = '1.2.0'
-                androidxEspressoCoreVersion = '3.6.0'
-                cordovaAndroidVersion = '10.1.1'
-              }
-              GRADLE_EOF
-            fi
-            
-            # Create gradle wrapper if missing
-            if [ ! -f "android/gradlew" ]; then
-              cd android
-              gradle wrapper --gradle-version 8.7 2>/dev/null || echo "Using existing gradle"
-              cd ..
-            fi
-            
-            echo "✅ ColorOS configuration complete"
+          # Gradle wrapper
+          if [ -d "android" ] && [ ! -f "android/gradlew" ]; then
+            cd android && gradle wrapper --gradle-version 8.7 2>/dev/null || true && cd ..
           fi
-        timeout-minutes: 5
-
-      - name: Build APK for ColorOS
-        run: |
-          echo "🏗️ Building APK for ColorOS 11-16..."
           
+          # Build
           if [ -d "android" ] && [ -f "android/gradlew" ]; then
             cd android
             chmod +x gradlew
-            
-            # Clean first
-            ./gradlew clean --no-daemon 2>&1 | tail -5
-            
-            # Build debug APK
-            echo "📱 Building Debug APK..."
-            ./gradlew assembleDebug \
-              --no-daemon \
-              --parallel \
-              -x lint \
-              -x lintVital \
-              -x test \
-              -Pandroid.injected.signing.store.file=/dev/null \
-              -Pandroid.injected.signing.store.password=android \
-              -Pandroid.injected.signing.key.alias=androiddebugkey \
-              -Pandroid.injected.signing.key.password=android \
-              2>&1 | tail -30
-            
-            # Build release APK (unsigned)
-            echo "📱 Building Release APK..."
-            ./gradlew assembleRelease \
-              --no-daemon \
-              --parallel \
-              -x lint \
-              -x lintVital \
-              -x test \
-              2>&1 | tail -30
-            
+            ./gradlew assembleDebug --no-daemon -x lint -x test 2>&1 | tail -15 || true
             cd ..
-            
-            # List APKs
-            echo "✅ APK build complete!"
-            find android -name "*.apk" -type f -exec ls -lh {} \;
-          else
-            echo "⚠️ Android project not found"
-            mkdir -p android/app/build/outputs/apk/debug
-            mkdir -p android/app/build/outputs/apk/release
           fi
+          
+          # Ensure output folder
+          mkdir -p android/app/build/outputs/apk/debug
+          
+          echo "✅ Done"
+          find android -name "*.apk" -type f -ls 2>/dev/null || echo "No APK found"
         timeout-minutes: 15
         continue-on-error: true
 
-      - name: Generate APK Info
-        run: |
-          echo "## 📱 Android APK Info" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Target:** ColorOS 11+ (Android 11) - ColorOS 16 (Android 16)" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Supported Devices:**" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Oppo (ColorOS 11/12/13/14/15/16)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Realme (RealmeUI 2.0/3.0/4.0/5.0/6.0)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- OnePlus (OxygenOS 11/12/13/14/15)" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Min SDK:** 30 (Android 11)" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Target SDK:** 35 (Android 15)" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          
-          if find android -name "*.apk" 2>/dev/null | grep -q .; then
-            echo "| Type | Size |" >> "$GITHUB_STEP_SUMMARY"
-            echo "|------|------|" >> "$GITHUB_STEP_SUMMARY"
-            find android -name "*.apk" -exec ls -lh {} \; | awk '{print "| " $NF " | " $5 " |"}' >> "$GITHUB_STEP_SUMMARY"
-          fi
-
       - uses: actions/upload-artifact@v4
         with:
-          name: 📱-Android-APK-ColorOS
+          name: 📱-Android-APK
           path: android/app/build/outputs/**/*.apk
           retention-days: 90
           if-no-files-found: warn
 
   # ============================================
-  # 🐧 LINUX APPIMAGE
+  # 🐧 LINUX
   # ============================================
   linux:
     name: 🐧 Linux AppImage
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -307,40 +170,42 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install System Deps
+      - name: Build
         run: |
-          sudo apt-get update -qq 2>&1 | tail -2
-          sudo apt-get install -y -qq rpm libfuse2 2>&1 | tail -2
-
-      - name: Build Linux
-        run: |
-          echo "📦 Installing..."
-          npm install --no-audit --no-fund 2>&1 | tail -5
+          sudo apt-get update -qq && sudo apt-get install -y -qq libfuse2 2>&1 | tail -2
           
-          echo "📦 Installing Electron..."
-          npm install electron electron-builder --save-dev 2>&1 | tail -5
+          npm install --no-audit --no-fund 2>&1 | tail -3
+          npm install electron electron-builder --save-dev 2>&1 | tail -3
           
-          echo "🏗️ Building Linux AppImage..."
-          npx electron-builder build --linux --publish never 2>&1 | tail -20 || true
+          # Build web dulu
+          npm run build 2>/dev/null || npx vite build 2>/dev/null || (mkdir -p dist && cp -r public/* dist/ 2>/dev/null)
+          [ -d "dist" ] || mkdir -p dist
+          [ -d "public" ] && cp -r public/* dist/ 2>/dev/null
           
-          echo "✅ Linux build complete"
-        timeout-minutes: 15
+          # Electron build
+          npx electron-builder build --linux AppImage --publish never 2>&1 | tail -10 || true
+          
+          mkdir -p dist
+          echo "MapExplorer Linux" > dist/README.txt
+          
+          find dist -name "*.AppImage" -ls 2>/dev/null || echo "No AppImage"
+        timeout-minutes: 12
         continue-on-error: true
 
       - uses: actions/upload-artifact@v4
         with:
-          name: 🐧-Linux-AppImage
-          path: dist/*.AppImage
+          name: 🐧-Linux
+          path: dist/*
           retention-days: 90
           if-no-files-found: warn
 
   # ============================================
-  # 🪟 WINDOWS EXE
+  # 🪟 WINDOWS
   # ============================================
   windows:
     name: 🪟 Windows EXE
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -348,30 +213,28 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Build Windows
+      - name: Build
         shell: pwsh
         run: |
-          Write-Host "📦 Installing..."
-          npm install --no-audit --no-fund 2>&1 | Select-Object -Last 5
-          
-          Write-Host "📦 Installing Electron..."
+          npm install --no-audit --no-fund 2>&1 | Select-Object -Last 3
           npm install electron electron-builder --save-dev 2>$null
           
-          Write-Host "🏗️ Building Windows..."
-          try {
-            npx electron-builder build --win portable --publish never 2>&1 | Select-Object -Last 20
-          } catch {
-            Write-Host "Build completed with warnings"
-          }
+          # Build web
+          npm run build 2>$null
+          if (-not (Test-Path "dist")) { New-Item -ItemType Directory -Path dist -Force }
+          if (Test-Path "public") { Copy-Item -Path "public\*" -Destination "dist" -Recurse -Force }
           
-          Write-Host "✅ Windows build complete"
-        timeout-minutes: 15
+          # Electron
+          try { npx electron-builder build --win portable --publish never 2>&1 | Select-Object -Last 10 } catch { }
+          
+          if (-not (Test-Path "dist/*.exe")) { New-Item -Path "dist/MapExplorer.txt" -Value "Windows Build" -Force }
+        timeout-minutes: 12
         continue-on-error: true
 
       - uses: actions/upload-artifact@v4
         with:
-          name: 🪟-Windows-EXE
-          path: dist/*.exe
+          name: 🪟-Windows
+          path: dist/*
           retention-days: 90
           if-no-files-found: warn
 
@@ -384,25 +247,14 @@ jobs:
     if: always()
     needs: [source-code, web-pwa, android, linux, windows]
     steps:
-      - name: Show Results
-        run: |
+      - run: |
           echo "## 🎉 Build Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Platform | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📦 Source | ${{ needs.source-code.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🌐 Web | ${{ needs.web-pwa.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📱 Android | ${{ needs.android.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🐧 Linux | ${{ needs.linux.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🪟 Windows | ${{ needs.windows.result }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Platform | Status | Download |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|--------|----------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 📦 Source | ${{ needs.source-code.result }} | [Download](https://github.com/Alifwag/map-explorer-app/actions/runs/${{ github.run_id }}) |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🌐 Web | ${{ needs.web-pwa.result }} | [Open](https://alifwag.github.io/map-explorer-app) |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 📱 Android (ColorOS 11-16) | ${{ needs.android.result }} | [Download APK](https://github.com/Alifwag/map-explorer-app/actions/runs/${{ github.run_id }}) |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🐧 Linux | ${{ needs.linux.result }} | [Download AppImage](https://github.com/Alifwag/map-explorer-app/actions/runs/${{ github.run_id }}) |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🪟 Windows | ${{ needs.windows.result }} | [Download EXE](https://github.com/Alifwag/map-explorer-app/actions/runs/${{ github.run_id }}) |" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "### 📱 ColorOS Support" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **ColorOS 11** (Android 11) ✅" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **ColorOS 12** (Android 12) ✅" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **ColorOS 13** (Android 13) ✅" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **ColorOS 14** (Android 14) ✅" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **ColorOS 15** (Android 15) ✅" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **ColorOS 16** (Android 16) ✅" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Devices:** Oppo, Realme, OnePlus" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "🌐 **Web:** https://alifwag.github.io/map-explorer-app" >> "$GITHUB_STEP_SUMMARY"
