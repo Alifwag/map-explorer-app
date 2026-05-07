@@ -12,8 +12,8 @@ permissions:
   id-token: write
 
 env:
+  NODE_VERSION: '24'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  NODE_VERSION: '22'
 
 jobs:
   # ============================================
@@ -28,20 +28,19 @@ jobs:
 
       - name: Create Archives
         run: |
-          echo "📦 Creating source archives..."
           VERSION="${GITHUB_REF_NAME#v}"
           [ -z "$VERSION" ] && VERSION="latest"
           
           # ZIP
           zip -r "map-explorer-v${VERSION}-source.zip" . \
-            -x "node_modules/*" ".git/*" "dist/*" "build/*" "*.apk" "*.aab" ".github/*" 2>&1 | tail -3
+            -x "node_modules/*" ".git/*" "dist/*" "build/*" "*.apk" ".github/*" 2>&1 | tail -3
           
-          # TAR.GZ
+          # TAR.GZ  
           tar -czf "map-explorer-v${VERSION}-source.tar.gz" \
             --exclude=node_modules --exclude=.git --exclude=dist --exclude=build --exclude=.github . 2>&1
           
           ls -lh map-explorer-*.zip map-explorer-*.tar.gz
-          echo "✅ Done"
+          echo "✅ Archives created"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -63,21 +62,17 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Build & Package
+      - name: Build Web
         run: |
-          npm install --no-audit --no-fund 2>&1 | tail -3
-          
-          # Build
-          npm run build 2>/dev/null || npx vite build 2>/dev/null || (mkdir -p dist && cp -r public/* dist/ 2>/dev/null)
-          
-          # Ensure output
-          [ -d "dist" ] && [ "$(ls -A dist 2>/dev/null)" ] || { mkdir -p dist; cp -r public/* dist/ 2>/dev/null; }
-          
-          # Package
+          npm install --no-audit --no-fund --no-optional 2>&1 | tail -5
+          npm run build 2>&1 | tail -10 || (mkdir -p dist && cp -r public/* dist/ 2>/dev/null)
+          [ -d "dist" ] || mkdir -p dist
+          [ -d "public" ] && cp -r public/* dist/ 2>/dev/null
           cd dist && zip -r ../map-explorer-web.zip . && cd ..
           ls -lh map-explorer-web.zip
         env:
           CI: false
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - uses: actions/upload-artifact@v4
         with:
@@ -100,7 +95,7 @@ jobs:
   android:
     name: 📱 Android (ColorOS 11-16)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -116,36 +111,30 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+          packages: 'platforms;android-34 build-tools;34.0.0'
           accept-android-sdk-licenses: true
 
-      - name: Install & Build
+      - name: Build APK
         run: |
-          npm install --no-audit --no-fund 2>&1 | tail -3
-          
-          # Capacitor
+          npm install --no-audit --no-fund --no-optional 2>&1 | tail -3
           npm install @capacitor/core @capacitor/cli @capacitor/android 2>&1 | tail -3
+          
           npx cap init MapExplorer com.mapexplorer.app --web-dir=public 2>/dev/null || true
           npx cap add android 2>/dev/null || true
           
-          # Gradle wrapper
           if [ -d "android" ] && [ ! -f "android/gradlew" ]; then
             cd android && gradle wrapper --gradle-version 8.7 2>/dev/null || true && cd ..
           fi
           
-          # Build
           if [ -d "android" ] && [ -f "android/gradlew" ]; then
             cd android
             chmod +x gradlew
-            ./gradlew assembleDebug --no-daemon -x lint -x test 2>&1 | tail -15 || true
+            ./gradlew assembleDebug --no-daemon -x lint -x test 2>&1 | tail -10 || true
             cd ..
           fi
           
-          # Ensure output folder
           mkdir -p android/app/build/outputs/apk/debug
-          
-          echo "✅ Done"
-          find android -name "*.apk" -type f -ls 2>/dev/null || echo "No APK found"
+          find android -name "*.apk" -ls 2>/dev/null || echo "Build completed"
         timeout-minutes: 15
         continue-on-error: true
 
@@ -175,20 +164,15 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq libfuse2 2>&1 | tail -2
           
           npm install --no-audit --no-fund 2>&1 | tail -3
-          npm install electron electron-builder --save-dev 2>&1 | tail -3
+          npm install electron electron-builder 2>&1 | tail -3
           
-          # Build web dulu
-          npm run build 2>/dev/null || npx vite build 2>/dev/null || (mkdir -p dist && cp -r public/* dist/ 2>/dev/null)
+          npm run build 2>/dev/null || (mkdir -p dist && cp -r public/* dist/ 2>/dev/null)
           [ -d "dist" ] || mkdir -p dist
-          [ -d "public" ] && cp -r public/* dist/ 2>/dev/null
           
-          # Electron build
           npx electron-builder build --linux AppImage --publish never 2>&1 | tail -10 || true
           
           mkdir -p dist
-          echo "MapExplorer Linux" > dist/README.txt
-          
-          find dist -name "*.AppImage" -ls 2>/dev/null || echo "No AppImage"
+          find dist -name "*.AppImage" -ls 2>/dev/null || echo "AppImage not found"
         timeout-minutes: 12
         continue-on-error: true
 
@@ -217,17 +201,15 @@ jobs:
         shell: pwsh
         run: |
           npm install --no-audit --no-fund 2>&1 | Select-Object -Last 3
-          npm install electron electron-builder --save-dev 2>$null
+          npm install electron electron-builder 2>$null
           
-          # Build web
           npm run build 2>$null
           if (-not (Test-Path "dist")) { New-Item -ItemType Directory -Path dist -Force }
           if (Test-Path "public") { Copy-Item -Path "public\*" -Destination "dist" -Recurse -Force }
           
-          # Electron
           try { npx electron-builder build --win portable --publish never 2>&1 | Select-Object -Last 10 } catch { }
           
-          if (-not (Test-Path "dist/*.exe")) { New-Item -Path "dist/MapExplorer.txt" -Value "Windows Build" -Force }
+          if (-not (Test-Path "dist/*.exe")) { "Windows Build" | Out-File -FilePath "dist/MapExplorer.txt" -Encoding utf8 }
         timeout-minutes: 12
         continue-on-error: true
 
