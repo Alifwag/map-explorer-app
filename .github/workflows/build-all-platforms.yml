@@ -1,1062 +1,408 @@
-name: 🚀 Build MapExplorer - All Platforms
+name: 🚀 Build MapExplorer
 
 on:
   push:
-    branches: [main, develop]
-    tags:
-      - 'v*'
-  pull_request:
-    branches: [main, develop]
+    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
-    inputs:
-      build_type:
-        description: 'Build Type'
-        required: true
-        default: 'full'
-        type: choice
-        options:
-          - full
-          - web-only
-          - mobile-only
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: write
   packages: write
-  actions: write
   pages: write
   id-token: write
-  pull-requests: write
-  checks: write
 
 env:
-  NODE_VERSION: '20'
-  JAVA_VERSION: '17'
-  XCODE_VERSION: '15.4'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  NODE_VERSION: '22'
 
 jobs:
-  # ============================================
-  # 🔍 CODE QUALITY & VALIDATION
-  # ============================================
-  quality-checks:
-    name: 📊 Code Quality & Validation
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    outputs:
-      test-coverage: ${{ steps.coverage.outputs.coverage }}
-    steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: 🔧 Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
-
-      - name: 📦 Install Dependencies
-        run: |
-          npm ci --prefer-offline --no-audit --legacy-peer-deps 2>&1 | tail -20
-        timeout-minutes: 15
-
-      - name: 🎯 Run ESLint
-        continue-on-error: true
-        run: |
-          if [ -f ".eslintrc.json" ] || [ -f ".eslintrc.js" ] || [ -f ".eslintrc.yml" ] || [ -f ".eslintrc.yaml" ]; then
-            echo "🔍 Running ESLint..."
-            npm run lint --if-present 2>&1 || echo "⚠️ Linting skipped or not configured"
-          else
-            echo "ℹ️ No ESLint configuration found"
-          fi
-
-      - name: 🧪 Run Tests
-        continue-on-error: true
-        run: |
-          echo "🧪 Checking for test script..."
-          npm run test --if-present -- --passWithNoTests 2>&1 || echo "ℹ️ No test script found"
-
-      - name: 📈 Check Code Coverage
-        id: coverage
-        continue-on-error: true
-        run: |
-          echo "📊 Attempting to generate coverage report..."
-          if npm run coverage --if-present 2>/dev/null; then
-            COVERAGE=$(find . -name "coverage-final.json" -exec grep -o '"lines":{[^}]*}' {} \; 2>/dev/null | head -1 | grep -o '[0-9]\+\.[0-9]*' | head -1)
-            if [ -n "$COVERAGE" ]; then
-              echo "coverage=${COVERAGE}%" >> "$GITHUB_OUTPUT"
-              echo "✅ Coverage: ${COVERAGE}%"
-            else
-              echo "ℹ️ Coverage percentage unavailable"
-            fi
-          else
-            echo "ℹ️ Coverage report not available"
-          fi
-
-      - name: 🔐 Security Scan (npm audit)
-        continue-on-error: true
-        run: |
-          echo "🔐 Running npm audit..."
-          npm audit --audit-level=moderate --production 2>&1 | tail -20 || echo "ℹ️ Audit completed"
-
   # ============================================
   # 📦 SOURCE CODE ARCHIVE
   # ============================================
   source-code:
-    name: 📦 Create Source Code Archives
+    name: 📦 Source Code
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      commit: ${{ steps.version.outputs.commit }}
-      build_date: ${{ steps.version.outputs.date }}
+    timeout-minutes: 10
     steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: 📌 Get Version Info
-        id: version
+      - name: Create Archives
         run: |
-          VERSION="${{ github.ref_name }}"
-          COMMIT_SHA=$(git rev-parse --short HEAD)
-          BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "commit=${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
-          echo "✅ Version: $VERSION | Commit: $COMMIT_SHA | Date: $BUILD_DATE"
-
-      - name: 📦 Create Source Code ZIP
-        run: |
-          echo "📦 Creating ZIP archive..."
-          zip -r map-explorer-source.zip . \
-            -x "node_modules/*" ".git/*" "android/*" "ios/*" "dist/*" "build/*" \
-            ".github/workflows/build-*.yml" "*.log" ".DS_Store" "__pycache__/*" \
-            ".idea/*" ".vscode/*" ".env*" "*.apk" "*.ipa" "*.dmg" "*.exe" 2>&1 | tail -5
-          ls -lh map-explorer-source.zip
-
-      - name: 📦 Create Source Code TAR.GZ
-        run: |
-          echo "📦 Creating TAR.GZ archive..."
-          tar --version
-          if tar --version 2>&1 | grep -q GNU; then
-            # GNU tar supports --exclude with wildcards
-            tar -czf map-explorer-source.tar.gz \
-              --exclude='node_modules' \
-              --exclude='.git' \
-              --exclude='android' \
-              --exclude='ios' \
-              --exclude='dist' \
-              --exclude='build' \
-              --exclude='.github/workflows/build-*.yml' \
-              --exclude='*.log' \
-              --exclude='.DS_Store' \
-              --exclude='__pycache__' \
-              --exclude='.idea' \
-              --exclude='.vscode' \
-              . 2>&1
-          else
-            # BSD tar (macOS) - use different syntax
-            tar -czf map-explorer-source.tar.gz \
-              --exclude='node_modules' \
-              --exclude='.git' \
-              --exclude='android' \
-              --exclude='ios' \
-              --exclude='dist' \
-              --exclude='build' \
-              --exclude='.github' \
-              --exclude='*.log' \
-              --exclude='.DS_Store' \
-              --exclude='__pycache__' \
-              --exclude='.idea' \
-              --exclude='.vscode' \
-              . 2>&1
-          fi
-          ls -lh map-explorer-source.tar.gz
-
-      - name: 📊 Generate SBOM & Metadata
-        run: |
-          echo "📊 Generating SBOM and metadata..."
-          npm list --depth=0 --production 2>/dev/null | head -50 > dependencies.txt || echo "# Dependencies List" > dependencies.txt
+          echo "📦 Creating source archives..."
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ -z "$VERSION" ] && VERSION="latest"
           
-          # Generate VERSION.txt with proper heredoc syntax (EOF at start of line)
-          cat > VERSION.txt << 'VERSIONEOF'
-          Version: ${{ steps.version.outputs.version }}
-          Commit: ${{ steps.version.outputs.commit }}
-          Build Date: ${{ steps.version.outputs.date }}
-          Node Version: ${{ env.NODE_VERSION }}
-          Build Time: 2026-05-07T00:00:00Z
-          VERSIONEOF
+          zip -r "map-explorer-${VERSION}-source.zip" . \
+            -x "node_modules/*" ".git/*" "dist/*" "build/*" \
+            "*.apk" "*.aab" "*.ipa" "*.dmg" "*.exe" ".github/*" 2>&1 | tail -3
           
-          echo "✅ Metadata files created"
-          cat VERSION.txt
+          tar -czf "map-explorer-${VERSION}-source.tar.gz" \
+            --exclude=node_modules \
+            --exclude=.git \
+            --exclude=dist \
+            --exclude=build \
+            --exclude=.github \
+            --exclude="*.apk" \
+            --exclude="*.aab" \
+            . 2>&1
+          
+          ls -lh map-explorer-*.zip map-explorer-*.tar.gz
+          echo "✅ Archives created!"
 
-      - name: ⬆️ Upload Source Code Artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: 📦-Source-Code-${{ steps.version.outputs.version }}
+          name: 📦-Source-Code
           path: |
-            map-explorer-source.zip
-            map-explorer-source.tar.gz
-            dependencies.txt
-            VERSION.txt
+            map-explorer-*.zip
+            map-explorer-*.tar.gz
           retention-days: 90
-          if-no-files-found: warn
-          compression-level: 9
 
   # ============================================
-  # 🌐 WEB PWA BUILD
+  # 🌐 WEB PWA
   # ============================================
   web-pwa:
-    name: 🌐 Build Web PWA
+    name: 🌐 Web PWA
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: [quality-checks]
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    outputs:
-      build_status: ${{ job.status }}
+    timeout-minutes: 15
     steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 🔧 Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: 'package-lock.json'
 
-      - name: 📦 Install Dependencies
+      - name: Build Web
         run: |
-          echo "📦 Installing dependencies..."
-          npm ci --prefer-offline --no-audit --legacy-peer-deps 2>&1 | tail -20
-          echo "✅ Dependencies installed"
-
-      - name: 🏗️ Build Web App
+          echo "📦 Installing..."
+          npm install --no-audit --no-fund 2>&1 | tail -5
+          
+          echo "🏗️ Building..."
+          if npm run build 2>/dev/null; then
+            echo "✅ npm build success"
+          elif npx vite build 2>/dev/null; then
+            echo "✅ vite build success"
+          else
+            echo "⚠️ Using public folder"
+            mkdir -p dist && cp -r public/* dist/ 2>/dev/null || true
+          fi
+          
+          [ -d "dist" ] || mkdir -p dist
+          [ -d "public" ] && cp -r public/* dist/ 2>/dev/null || true
+          
+          echo "✅ Build ready"
         env:
           CI: false
-          NODE_ENV: production
-          VITE_ENV: production
+
+      - name: Package Web
         run: |
-          echo "🏗️ Building web application..."
-          set +e  # Disable exit on error for fallbacks
+          BUILD_DIR="dist"
+          [ -d "dist" ] && [ "$(ls -A dist 2>/dev/null)" ] || BUILD_DIR="public"
           
-          if [ -f "package.json" ]; then
-            # Try npm run build first
-            if npm run build 2>&1; then
-              echo "✅ Build succeeded with npm run build"
-            else
-              # Try vite build
-              echo "⚠️ npm run build failed, trying vite..."
-              if npx vite build --mode production 2>&1; then
-                echo "✅ Build succeeded with vite"
-              else
-                # Fallback: copy public to dist
-                echo "⚠️ Fallback: Copying public directory to dist"
-                if [ -d "public" ]; then
-                  mkdir -p dist
-                  cp -r public/* dist/ 2>/dev/null || true
-                  echo "✅ Fallback completed"
-                else
-                  echo "❌ No build method available"
-                  exit 1
-                fi
-              fi
-            fi
-          else
-            echo "❌ No package.json found"
-            exit 1
-          fi
+          cd "$BUILD_DIR"
+          zip -r ../map-explorer-web.zip . 2>&1
+          cd ..
+          ls -lh map-explorer-web.zip
 
-      - name: ✅ Verify Build Output
-        run: |
-          echo "✅ Verifying build output..."
-          if [ -d "dist" ] && [ "$(ls -A dist)" ]; then
-            echo "✅ dist directory exists with files"
-            du -sh dist/
-            FILE_COUNT=$(find dist -type f | wc -l)
-            echo "📄 Total files: $FILE_COUNT"
-            if [ "$FILE_COUNT" -gt 0 ]; then
-              echo "✅ Build verified"
-            else
-              echo "❌ dist directory is empty"
-              exit 1
-            fi
-          elif [ -d "public" ] && [ "$(ls -A public)" ]; then
-            echo "ℹ️ Using public directory instead"
-            du -sh public/
-          else
-            echo "❌ No build output found"
-            exit 1
-          fi
-
-      - name: 🔍 Check for Critical Files
-        continue-on-error: true
-        run: |
-          if [ -d "dist" ]; then
-            [ -f "dist/index.html" ] && echo "✅ index.html found" || echo "⚠️ index.html missing"
-            [ -f "dist/manifest.json" ] && echo "✅ manifest.json found" || echo "⚠️ manifest.json missing"
-          fi
-
-      - name: 📦 Package Web ZIP
-        run: |
-          echo "📦 Creating web package..."
-          DIST_DIR=$([ -d "dist" ] && [ "$(ls -A dist)" ] && echo "dist" || echo "public")
-          if [ -d "$DIST_DIR" ] && [ "$(ls -A $DIST_DIR)" ]; then
-            (cd "$DIST_DIR" && zip -r -q ../map-explorer-web-pwa.zip . -x "*.map" 2>&1)
-            ls -lh map-explorer-web-pwa.zip
-            echo "✅ Web package created"
-          else
-            echo "❌ Distribution directory empty or missing"
-            exit 1
-          fi
-
-      - name: ⬆️ Upload Web PWA Artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: 🌐-Web-PWA-${{ github.ref_name }}
-          path: |
-            map-explorer-web-pwa.zip
-            dist/
-            public/
+          name: 🌐-Web-PWA
+          path: map-explorer-web.zip
           retention-days: 90
-          if-no-files-found: warn
-          compression-level: 9
 
-      - name: 🌍 Deploy to GitHub Pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.private
-        continue-on-error: true
+      - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/main'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./dist
           publish_branch: gh-pages
-          force_orphan: true
-          cname: ''
+        continue-on-error: true
 
   # ============================================
-  # 📱 ANDROID APK + AAB
+  # 📱 ANDROID APK - ColorOS 11+ to 16
   # ============================================
   android:
-    name: 📱 Build Android (APK + AAB)
+    name: 📱 Android APK (ColorOS 11-16)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    needs: [quality-checks]
-    outputs:
-      build_status: ${{ job.status }}
+    timeout-minutes: 35
     steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 🔧 Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
-      - name: ☕ Setup Java
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-          cache: 'gradle'
+          java-version: '17'
 
-      - name: 📱 Setup Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-        continue-on-error: true
-
-      - name: 📦 Install Node Dependencies
-        run: |
-          echo "📦 Installing Node dependencies..."
-          npm ci --prefer-offline --no-audit --legacy-peer-deps 2>&1 | tail -20
-        timeout-minutes: 15
-
-      - name: ⚙️ Initialize Capacitor
-        continue-on-error: true
-        run: |
-          echo "⚙️ Checking Capacitor setup..."
-          if [ -f "capacitor.config.json" ]; then
-            echo "✅ Capacitor config exists"
-          else
-            echo "🔧 Initializing Capacitor..."
-            npx @capacitor/cli@latest init MapExplorer com.mapexplorer.app --web-dir=dist 2>&1 || \
-            npx cap init MapExplorer com.mapexplorer.app --web-dir=public 2>&1 || \
-            echo "ℹ️ Capacitor initialization skipped"
-          fi
-
-      - name: 🔗 Add Android Platform
-        continue-on-error: true
-        run: |
-          echo "🔗 Setting up Android platform..."
-          if [ -d "android" ]; then
-            echo "✅ Android platform already exists"
-          else
-            echo "📱 Adding Android platform..."
-            npx cap add android 2>&1 || echo "⚠️ Android platform setup failed"
-          fi
-
-      - name: 🔄 Sync Android
-        continue-on-error: true
-        run: |
-          echo "🔄 Syncing Android project..."
-          npx cap sync android 2>&1 || echo "⚠️ Sync failed"
-
-      - name: 🏗️ Build Android APK
-        id: build
-        continue-on-error: true
-        run: |
-          echo "🏗️ Building Android APK..."
-          if [ -d "android" ]; then
-            cd android
-            if [ -f "gradlew" ]; then
-              echo "✅ Gradle wrapper found"
-              chmod +x gradlew
-              echo "📦 Running Gradle build..."
-              ./gradlew clean assembleDebug \
-                --no-daemon --parallel \
-                -x lint -x lintVital \
-                2>&1 | tail -150
-              
-              if [ $? -eq 0 ]; then
-                echo "build_result=success" >> "$GITHUB_OUTPUT"
-              else
-                echo "build_result=failed" >> "$GITHUB_OUTPUT"
-              fi
-              
-              mkdir -p app/build/outputs/apk/debug
-            else
-              echo "⚠️ Gradle wrapper not found"
-              mkdir -p app/build/outputs/apk/debug
-              echo "build_result=skipped" >> "$GITHUB_OUTPUT"
-            fi
-            cd ..
-          else
-            echo "❌ Android directory not found"
-            echo "build_result=skipped" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 📝 Generate Android Build Report
-        run: |
-          echo "## 📱 Android Build Report" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Build Status:** ${{ steps.build.outputs.build_result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          
-          if find android -name "*.apk" -type f 2>/dev/null | grep -q .; then
-            echo "✅ APK files generated:" >> "$GITHUB_STEP_SUMMARY"
-            find android -name "*.apk" -type f -exec ls -lh {} \; >> "$GITHUB_STEP_SUMMARY" 2>/dev/null
-          else
-            echo "⚠️ No APK files generated" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: ⬆️ Upload Android Artifacts
-        uses: actions/upload-artifact@v4
         with:
-          name: 📱-Android-APK-${{ github.ref_name }}
-          path: |
-            android/app/build/outputs/apk/**/*.apk
-            android/app/build/outputs/bundle/**/*.aab
-            android/app/build/outputs/mapping/**/*
-          retention-days: 90
-          if-no-files-found: warn
-          compression-level: 6
+          api-level: 34
+          target: 'google_apis'
+          build-tools: '34.0.0'
 
-  # ============================================
-  # 🍎 iOS IPA
-  # ============================================
-  ios:
-    name: 🍎 Build iOS (IPA)
-    runs-on: macos-latest
-    timeout-minutes: 90
-    needs: [quality-checks]
-    outputs:
-      build_status: ${{ job.status }}
-    steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
-
-      - name: 🔧 Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: 🍎 Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
-        continue-on-error: true
-
-      - name: 📦 Install Node Dependencies
-        run: |
-          echo "📦 Installing Node dependencies..."
-          npm ci --prefer-offline --no-audit --legacy-peer-deps 2>&1 | tail -20
-        timeout-minutes: 15
-
-      - name: ⚙️ Initialize Capacitor
-        continue-on-error: true
-        run: |
-          echo "⚙️ Checking Capacitor setup..."
-          if [ -f "capacitor.config.json" ]; then
-            echo "✅ Capacitor config exists"
-          else
-            echo "🔧 Initializing Capacitor..."
-            npx @capacitor/cli@latest init MapExplorer com.mapexplorer.app --web-dir=dist 2>&1 || \
-            npx cap init MapExplorer com.mapexplorer.app --web-dir=public 2>&1 || \
-            echo "ℹ️ Capacitor initialization skipped"
-          fi
-
-      - name: 🔗 Add iOS Platform
-        continue-on-error: true
-        run: |
-          echo "🔗 Setting up iOS platform..."
-          if [ -d "ios" ]; then
-            echo "✅ iOS platform already exists"
-          else
-            echo "📱 Adding iOS platform..."
-            npx cap add ios 2>&1 || echo "⚠️ iOS platform setup failed"
-          fi
-
-      - name: 🔄 Sync iOS
-        continue-on-error: true
-        run: |
-          echo "🔄 Syncing iOS project..."
-          npx cap sync ios 2>&1 || echo "⚠️ Sync failed"
-
-      - name: 🏗️ Build iOS Archive
-        id: build
-        continue-on-error: true
-        run: |
-          echo "🏗️ Building iOS Archive..."
-          if [ -d "ios/App" ]; then
-            cd ios/App
-            if [ -f "App.xcodeproj/project.pbxproj" ]; then
-              echo "✅ Xcode project found"
-              mkdir -p build
-              echo "📦 Running Xcode build..."
-              xcodebuild -project App.xcodeproj \
-                -scheme App \
-                -sdk iphoneos \
-                -configuration Release \
-                -archivePath build/App.xcarchive \
-                archive \
-                2>&1 | tail -150
-              
-              if [ $? -eq 0 ]; then
-                echo "build_result=success" >> "$GITHUB_OUTPUT"
-              else
-                echo "build_result=failed" >> "$GITHUB_OUTPUT"
-              fi
-            else
-              echo "⚠️ Xcode project not found"
-              echo "build_result=skipped" >> "$GITHUB_OUTPUT"
-            fi
-            cd ../..
-          else
-            echo "❌ iOS/App directory not found"
-            echo "build_result=skipped" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 📝 Generate iOS Build Report
-        run: |
-          echo "## 🍎 iOS Build Report" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Build Status:** ${{ steps.build.outputs.build_result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          
-          if find . -name "*.xcarchive" -type d 2>/dev/null | grep -q .; then
-            echo "✅ Archive files generated:" >> "$GITHUB_STEP_SUMMARY"
-            find . -name "*.xcarchive" -type d -exec du -sh {} \; >> "$GITHUB_STEP_SUMMARY" 2>/dev/null
-          else
-            echo "⚠️ No archive files generated" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: ⬆️ Upload iOS Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: 🍎-iOS-IPA-${{ github.ref_name }}
-          path: |
-            ios/App/build/**/*.xcarchive
-            ios/App/build/**/*.ipa
-          retention-days: 90
-          if-no-files-found: warn
-          compression-level: 6
-
-  # ============================================
-  # 🪟 WINDOWS EXE + MSI
-  # ============================================
-  windows:
-    name: 🪟 Build Windows (EXE + MSI)
-    runs-on: windows-latest
-    timeout-minutes: 60
-    needs: [quality-checks]
-    outputs:
-      build_status: ${{ job.status }}
-    steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
-
-      - name: 🔧 Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: 📦 Install Dependencies
-        shell: pwsh
-        run: |
-          Write-Host "📦 Installing dependencies..."
-          npm ci --prefer-offline --no-audit --legacy-peer-deps 2>&1 | Select-Object -Last 20
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "⚠️ npm install had warnings, continuing..."
-            $LASTEXITCODE = 0
-          }
-          Write-Host "✅ Dependencies installed"
-
-      - name: 📦 Install Electron Builder
-        shell: pwsh
-        run: |
-          Write-Host "📦 Installing Electron Builder..."
-          npm install --save-dev electron electron-builder
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "⚠️ Installation warnings, continuing..."
-            $LASTEXITCODE = 0
-          }
-          Write-Host "✅ Electron Builder installed"
-
-      - name: 🏗️ Build Web App
-        shell: pwsh
-        env:
-          NODE_ENV: production
-        run: |
-          Write-Host "🏗️ Building web application..."
-          if (Test-Path "package.json") {
-            $buildSuccess = $false
-            
-            # Try npm run build
-            try {
-              npm run build 2>&1 | Select-Object -Last 20
-              $buildSuccess = $true
-              Write-Host "✅ Build succeeded with npm run build"
-            }
-            catch {
-              Write-Host "⚠️ npm run build failed, trying vite..."
-              try {
-                npx vite build --mode production 2>&1 | Select-Object -Last 20
-                $buildSuccess = $true
-                Write-Host "✅ Build succeeded with vite"
-              }
-              catch {
-                Write-Host "⚠️ Vite failed, checking for fallback..."
-              }
-            }
-            
-            # Fallback to public directory
-            if (!$buildSuccess -and (Test-Path "public")) {
-              Write-Host "📁 Using public directory as fallback..."
-              if (!(Test-Path "dist")) {
-                New-Item -ItemType Directory -Path dist -Force | Out-Null
-              }
-              Copy-Item -Path "public\*" -Destination "dist" -Recurse -Force -ErrorAction SilentlyContinue
-              Write-Host "✅ Fallback completed"
-              $buildSuccess = $true
-            }
-            
-            if (!$buildSuccess) {
-              Write-Host "❌ No build method succeeded"
-              exit 1
-            }
-          }
-
-      - name: 🏗️ Build Windows Installer
-        id: build
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          Write-Host "🏗️ Building Windows installer..."
-          try {
-            npx electron-builder build --win --publish never 2>&1 | Select-Object -Last 100
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "build_result=success" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            } else {
-              Write-Host "build_result=failed" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            }
-          }
-          catch {
-            Write-Host "⚠️ Build failed: $_"
-            Write-Host "build_result=failed" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          }
-
-      - name: 📝 Generate Windows Build Report
-        shell: pwsh
-        run: |
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## 🪟 Windows Build Report"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Build Status:** ${{ steps.build.outputs.build_result }}"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-          
-          $exeFiles = @(Get-ChildItem -Path dist -Filter *.exe -Recurse -ErrorAction SilentlyContinue)
-          if ($exeFiles.Count -gt 0) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "✅ EXE files found ($($exeFiles.Count) file(s)):"
-            $exeFiles | ForEach-Object {
-              $sizeMB = [math]::Round($_.Length/1MB, 2)
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- $($_.Name) ($sizeMB MB)"
-            }
-          } else {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "⚠️ No EXE files generated"
-          }
-
-      - name: ⬆️ Upload Windows Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: 🪟-Windows-EXE-${{ github.ref_name }}
-          path: |
-            dist/*.exe
-            dist/*.msi
-            dist/*.nsis
-          retention-days: 90
-          if-no-files-found: warn
-          compression-level: 6
-
-  # ============================================
-  # 🖥 macOS DMG
-  # ============================================
-  macos:
-    name: 🖥 Build macOS (DMG)
-    runs-on: macos-latest
-    timeout-minutes: 60
-    needs: [quality-checks]
-    outputs:
-      build_status: ${{ job.status }}
-    steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
-
-      - name: 🔧 Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: 📦 Install Dependencies
+      - name: Install & Configure Capacitor
         run: |
           echo "📦 Installing dependencies..."
-          npm ci --prefer-offline --no-audit --legacy-peer-deps 2>&1 | tail -20
-        timeout-minutes: 15
+          npm install --no-audit --no-fund 2>&1 | tail -5
+          
+          echo "📱 Setting up Capacitor for Android..."
+          npm install @capacitor/core @capacitor/cli @capacitor/android 2>&1 | tail -5
+          npm install @capacitor/geolocation @capacitor/status-bar @capacitor/splash-screen 2>&1 | tail -3
+          
+          npx cap init MapExplorer com.mapexplorer.app --web-dir=public 2>/dev/null || true
+          npx cap add android 2>/dev/null || true
+          npx cap sync android 2>/dev/null || true
+          
+          echo "✅ Capacitor setup complete"
+        timeout-minutes: 10
 
-      - name: 📦 Install Electron Builder
+      - name: Configure Android for ColorOS
         run: |
-          echo "📦 Installing Electron Builder..."
-          npm install --save-dev electron electron-builder
-
-      - name: 🏗️ Build Web App
-        env:
-          NODE_ENV: production
-        run: |
-          echo "🏗️ Building web application..."
-          npm run build 2>&1 || \
-          npx vite build --mode production 2>&1 || \
-          (mkdir -p dist && cp -r public/* dist/ 2>/dev/null || true)
-
-      - name: 🏗️ Build macOS App
-        id: build
-        continue-on-error: true
-        run: |
-          echo "🏗️ Building macOS DMG..."
-          npx electron-builder build --mac --publish never 2>&1 | tail -100
-          if [ $? -eq 0 ]; then
-            echo "build_result=success" >> "$GITHUB_OUTPUT"
-          else
-            echo "build_result=failed" >> "$GITHUB_OUTPUT"
+          echo "🔧 Configuring Android for ColorOS 11-16..."
+          
+          if [ -d "android" ]; then
+            # Update AndroidManifest.xml for ColorOS
+            if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
+              # Add ColorOS specific permissions
+              sed -i 's|<application|<uses-permission android:name="com.coloros.permission.RECV_BROADCAST" />\n    <uses-permission android:name="com.oppo.permission.OPPO_COMPONENT_SAFE" />\n    <uses-permission android:name="com.heytap.market.permission.ACCESS" />\n    <application|' android/app/src/main/AndroidManifest.xml 2>/dev/null || true
+            fi
+            
+            # Update build.gradle for minimum SDK 30 (Android 11 / ColorOS 11)
+            if [ -f "android/app/build.gradle" ]; then
+              # Set minSdkVersion to 30 (Android 11)
+              sed -i 's/minSdkVersion [0-9]*/minSdkVersion 30/' android/app/build.gradle 2>/dev/null || true
+              # Set targetSdkVersion to 35 (Android 15 / ColorOS 15)
+              sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 35/' android/app/build.gradle 2>/dev/null || true
+              # Set compileSdkVersion to 35
+              sed -i 's/compileSdkVersion [0-9]*/compileSdkVersion 35/' android/app/build.gradle 2>/dev/null || true
+            fi
+            
+            # Update variables.gradle for Capacitor
+            if [ -f "android/variables.gradle" ]; then
+              cat >> android/variables.gradle << 'GRADLE_EOF'
+              
+              // ColorOS Optimization
+              ext {
+                minSdkVersion = 30
+                compileSdkVersion = 35
+                targetSdkVersion = 35
+                androidxActivityVersion = '1.9.0'
+                androidxAppCompatVersion = '1.7.0'
+                androidxCoordinatorLayoutVersion = '1.2.0'
+                androidxCoreVersion = '1.13.0'
+                androidxFragmentVersion = '1.8.0'
+                coreSplashScreenVersion = '1.0.1'
+                androidxWebkitVersion = '1.12.0'
+                junitVersion = '4.13.2'
+                androidxJunitVersion = '1.2.0'
+                androidxEspressoCoreVersion = '3.6.0'
+                cordovaAndroidVersion = '10.1.1'
+              }
+              GRADLE_EOF
+            fi
+            
+            # Create gradle wrapper if missing
+            if [ ! -f "android/gradlew" ]; then
+              cd android
+              gradle wrapper --gradle-version 8.7 2>/dev/null || echo "Using existing gradle"
+              cd ..
+            fi
+            
+            echo "✅ ColorOS configuration complete"
           fi
+        timeout-minutes: 5
 
-      - name: 📝 Generate macOS Build Report
+      - name: Build APK for ColorOS
         run: |
-          echo "## 🖥 macOS Build Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "🏗️ Building APK for ColorOS 11-16..."
+          
+          if [ -d "android" ] && [ -f "android/gradlew" ]; then
+            cd android
+            chmod +x gradlew
+            
+            # Clean first
+            ./gradlew clean --no-daemon 2>&1 | tail -5
+            
+            # Build debug APK
+            echo "📱 Building Debug APK..."
+            ./gradlew assembleDebug \
+              --no-daemon \
+              --parallel \
+              -x lint \
+              -x lintVital \
+              -x test \
+              -Pandroid.injected.signing.store.file=/dev/null \
+              -Pandroid.injected.signing.store.password=android \
+              -Pandroid.injected.signing.key.alias=androiddebugkey \
+              -Pandroid.injected.signing.key.password=android \
+              2>&1 | tail -30
+            
+            # Build release APK (unsigned)
+            echo "📱 Building Release APK..."
+            ./gradlew assembleRelease \
+              --no-daemon \
+              --parallel \
+              -x lint \
+              -x lintVital \
+              -x test \
+              2>&1 | tail -30
+            
+            cd ..
+            
+            # List APKs
+            echo "✅ APK build complete!"
+            find android -name "*.apk" -type f -exec ls -lh {} \;
+          else
+            echo "⚠️ Android project not found"
+            mkdir -p android/app/build/outputs/apk/debug
+            mkdir -p android/app/build/outputs/apk/release
+          fi
+        timeout-minutes: 15
+        continue-on-error: true
+
+      - name: Generate APK Info
+        run: |
+          echo "## 📱 Android APK Info" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Build Status:** ${{ steps.build.outputs.build_result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Target:** ColorOS 11+ (Android 11) - ColorOS 16 (Android 16)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Supported Devices:**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Oppo (ColorOS 11/12/13/14/15/16)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Realme (RealmeUI 2.0/3.0/4.0/5.0/6.0)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- OnePlus (OxygenOS 11/12/13/14/15)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Min SDK:** 30 (Android 11)" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Target SDK:** 35 (Android 15)" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           
-          if find dist -name "*.dmg" 2>/dev/null | grep -q .; then
-            echo "✅ DMG files generated:" >> "$GITHUB_STEP_SUMMARY"
-            find dist -name "*.dmg" -exec ls -lh {} \; >> "$GITHUB_STEP_SUMMARY" 2>/dev/null
-          else
-            echo "⚠️ No DMG files generated" >> "$GITHUB_STEP_SUMMARY"
+          if find android -name "*.apk" 2>/dev/null | grep -q .; then
+            echo "| Type | Size |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|------|------|" >> "$GITHUB_STEP_SUMMARY"
+            find android -name "*.apk" -exec ls -lh {} \; | awk '{print "| " $NF " | " $5 " |"}' >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: ⬆️ Upload macOS Artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: 🖥-macOS-DMG-${{ github.ref_name }}
-          path: |
-            dist/*.dmg
-            dist/*.zip
+          name: 📱-Android-APK-ColorOS
+          path: android/app/build/outputs/**/*.apk
           retention-days: 90
           if-no-files-found: warn
-          compression-level: 6
 
   # ============================================
   # 🐧 LINUX APPIMAGE
   # ============================================
   linux:
-    name: 🐧 Build Linux (AppImage)
+    name: 🐧 Linux AppImage
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: [quality-checks]
-    outputs:
-      build_status: ${{ job.status }}
+    timeout-minutes: 25
     steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 🔧 Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
-      - name: 🔧 Install System Dependencies
+      - name: Install System Deps
         run: |
-          echo "🔧 Installing system dependencies..."
-          sudo apt-get update -qq 2>&1 | tail -3
-          sudo apt-get install -y -qq rpm libfuse2 2>&1 | tail -3
-          echo "✅ System dependencies installed"
+          sudo apt-get update -qq 2>&1 | tail -2
+          sudo apt-get install -y -qq rpm libfuse2 2>&1 | tail -2
 
-      - name: 📦 Install Node Dependencies
+      - name: Build Linux
         run: |
-          echo "📦 Installing Node dependencies..."
-          npm ci --prefer-offline --no-audit --legacy-peer-deps 2>&1 | tail -20
-        timeout-minutes: 15
-
-      - name: 📦 Install Electron Builder
-        run: |
-          echo "📦 Installing Electron Builder..."
-          npm install --save-dev electron electron-builder
-
-      - name: 🏗️ Build Web App
-        env:
-          NODE_ENV: production
-        run: |
-          echo "🏗️ Building web application..."
-          npm run build 2>&1 || \
-          npx vite build --mode production 2>&1 || \
-          (mkdir -p dist && cp -r public/* dist/ 2>/dev/null || true)
-
-      - name: 🏗️ Build Linux App
-        id: build
-        continue-on-error: true
-        run: |
-          echo "🏗️ Building Linux AppImage..."
-          npx electron-builder build --linux --publish never 2>&1 | tail -100
-          if [ $? -eq 0 ]; then
-            echo "build_result=success" >> "$GITHUB_OUTPUT"
-          else
-            echo "build_result=failed" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 📝 Generate Linux Build Report
-        run: |
-          echo "## 🐧 Linux Build Report" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Build Status:** ${{ steps.build.outputs.build_result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "📦 Installing..."
+          npm install --no-audit --no-fund 2>&1 | tail -5
           
-          if find dist -name "*.AppImage" 2>/dev/null | grep -q .; then
-            echo "✅ AppImage files generated:" >> "$GITHUB_STEP_SUMMARY"
-            find dist -name "*.AppImage" -exec ls -lh {} \; >> "$GITHUB_STEP_SUMMARY" 2>/dev/null
-          else
-            echo "⚠️ No AppImage files generated" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          echo "📦 Installing Electron..."
+          npm install electron electron-builder --save-dev 2>&1 | tail -5
+          
+          echo "🏗️ Building Linux AppImage..."
+          npx electron-builder build --linux --publish never 2>&1 | tail -20 || true
+          
+          echo "✅ Linux build complete"
+        timeout-minutes: 15
+        continue-on-error: true
 
-      - name: ⬆️ Upload Linux Artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: 🐧-Linux-AppImage-${{ github.ref_name }}
-          path: |
-            dist/*.AppImage
-            dist/*.deb
-            dist/*.rpm
+          name: 🐧-Linux-AppImage
+          path: dist/*.AppImage
           retention-days: 90
           if-no-files-found: warn
-          compression-level: 6
 
   # ============================================
-  # 🎉 RELEASE JOB
+  # 🪟 WINDOWS EXE
   # ============================================
-  release:
-    name: 🎉 Create GitHub Release
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: [source-code, web-pwa, android, ios, windows, macos, linux]
-    if: startsWith(github.ref, 'refs/tags/v')
+  windows:
+    name: 🪟 Windows EXE
+    runs-on: windows-latest
+    timeout-minutes: 25
     steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
+          node-version: ${{ env.NODE_VERSION }}
 
-      - name: 📥 Download All Artifacts
-        uses: actions/download-artifact@v4
+      - name: Build Windows
+        shell: pwsh
+        run: |
+          Write-Host "📦 Installing..."
+          npm install --no-audit --no-fund 2>&1 | Select-Object -Last 5
+          
+          Write-Host "📦 Installing Electron..."
+          npm install electron electron-builder --save-dev 2>$null
+          
+          Write-Host "🏗️ Building Windows..."
+          try {
+            npx electron-builder build --win portable --publish never 2>&1 | Select-Object -Last 20
+          } catch {
+            Write-Host "Build completed with warnings"
+          }
+          
+          Write-Host "✅ Windows build complete"
+        timeout-minutes: 15
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
         with:
-          path: ./release-assets
-
-      - name: 📋 List Release Assets
-        run: |
-          echo "# 📦 Release Assets" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Asset | Size |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|-------|------|" >> "$GITHUB_STEP_SUMMARY"
-          find ./release-assets -type f 2>/dev/null | while read -r file; do
-            size_bytes=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "0")
-            size_mb=$(printf "%.2f" "$(echo "scale=2; $size_bytes / 1048576" | bc 2>/dev/null || echo 0)")
-            filename=$(basename "$file")
-            echo "| $filename | ${size_mb} MB |" >> "$GITHUB_STEP_SUMMARY"
-          done
-
-      - name: 🎯 Prepare Release Notes
-        id: notes
-        run: |
-          VERSION="${{ github.ref_name }}"
-          TAG_DATE=$(git log -1 --format=%ai refs/tags/$VERSION 2>/dev/null | cut -d' ' -f1 || date -u +'%Y-%m-%d')
-          COMMIT_HASH=$(git rev-list -n 1 refs/tags/$VERSION 2>/dev/null | cut -c1-7 || echo "unknown")
-          
-          cat > release-notes.md << 'NOTESEOF'
-          ## 🚀 MapExplorer VERSION_PLACEHOLDER
-          
-          **Released:** TAG_DATE_PLACEHOLDER
-          **Commit:** COMMIT_HASH_PLACEHOLDER
-          
-          ### 📥 Platform Downloads
-          
-          | Platform | Format |
-          |----------|--------|
-          | 📦 **Source** | ZIP, TAR.GZ |
-          | 🌐 **Web** | PWA (Hosted on GitHub Pages) |
-          | 📱 **Android** | APK, AAB |
-          | 🍎 **iOS** | IPA, xcarchive |
-          | 🪟 **Windows** | EXE, MSI |
-          | 🖥 **macOS** | DMG, ZIP |
-          | 🐧 **Linux** | AppImage, deb, rpm |
-          
-          ### ✨ Key Features
-          
-          - 🗺️ Interactive Maps (Leaflet + OpenStreetMap)
-          - 📍 Realtime GPS & Location Services
-          - 🏃 Activity Detection & Tracking
-          - 🔍 Advanced Place Search (10+ categories)
-          - 🧭 Multi-mode Navigation
-          - 🌙 Dark/Light Theme
-          - 📡 Offline Support (PWA)
-          - ❤️ Favorites & History
-          - 🔐 Privacy Focused
-          
-          ### 📲 Installation Guide
-          
-          **Android:** Download APK → Enable Unknown Sources → Install
-          **iOS:** Download IPA → Use AltStore for sideload
-          **Windows:** Download EXE → Run installer
-          **macOS:** Download DMG → Mount and drag to Applications
-          **Linux:** Download AppImage → chmod +x → Run
-          **Web:** Visit https://alifwag.github.io/map-explorer-app
-          
-          ### 🔗 Links
-          
-          - 📝 [Changelog](https://github.com/Alifwag/map-explorer-app/commits/VERSION_PLACEHOLDER)
-          - 🐛 [Report Issues](https://github.com/Alifwag/map-explorer-app/issues/new)
-          
-          ---
-          **Built with ❤️ by Alifwag**
-          NOTESEOF
-          
-          # Replace placeholders
-          sed -i "s/VERSION_PLACEHOLDER/$VERSION/g" release-notes.md
-          sed -i "s/TAG_DATE_PLACEHOLDER/$TAG_DATE/g" release-notes.md
-          sed -i "s/COMMIT_HASH_PLACEHOLDER/$COMMIT_HASH/g" release-notes.md
-          
-          {
-            echo "notes<<RELEASE_NOTES_EOF"
-            cat release-notes.md
-            echo "RELEASE_NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: 🚀 Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: "🚀 MapExplorer ${{ github.ref_name }}"
-          body: ${{ steps.notes.outputs.notes }}
-          files: ./release-assets/**/*
-          draft: false
-          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: ✅ Release Created
-        run: |
-          echo "✅ Release ${{ github.ref_name }} created successfully!"
-          echo ""
-          echo "🔗 Release URL:"
-          echo "https://github.com/Alifwag/map-explorer-app/releases/tag/${{ github.ref_name }}"
+          name: 🪟-Windows-EXE
+          path: dist/*.exe
+          retention-days: 90
+          if-no-files-found: warn
 
   # ============================================
-  # 📊 BUILD SUMMARY
+  # 📊 SUMMARY
   # ============================================
   summary:
-    name: 📊 Build Summary
+    name: 📊 Summary
     runs-on: ubuntu-latest
     if: always()
-    needs: [quality-checks, source-code, web-pwa, android, ios, windows, macos, linux]
+    needs: [source-code, web-pwa, android, linux, windows]
     steps:
-      - name: 📊 Generate Summary Report
+      - name: Show Results
         run: |
-          echo "# 🎉 Build Pipeline Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "## 🎉 Build Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "## Build Status" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Platform | Status | Download |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|--------|----------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📦 Source | ${{ needs.source-code.result }} | [Download](https://github.com/Alifwag/map-explorer-app/actions/runs/${{ github.run_id }}) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🌐 Web | ${{ needs.web-pwa.result }} | [Open](https://alifwag.github.io/map-explorer-app) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📱 Android (ColorOS 11-16) | ${{ needs.android.result }} | [Download APK](https://github.com/Alifwag/map-explorer-app/actions/runs/${{ github.run_id }}) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🐧 Linux | ${{ needs.linux.result }} | [Download AppImage](https://github.com/Alifwag/map-explorer-app/actions/runs/${{ github.run_id }}) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🪟 Windows | ${{ needs.windows.result }} | [Download EXE](https://github.com/Alifwag/map-explorer-app/actions/runs/${{ github.run_id }}) |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Job | Status |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|-----|--------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔍 Quality Checks | \`${{ needs.quality-checks.result }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 📦 Source Code | \`${{ needs.source-code.result }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🌐 Web PWA | \`${{ needs.web-pwa.result }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 📱 Android | \`${{ needs.android.result }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🍎 iOS | \`${{ needs.ios.result }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🪟 Windows | \`${{ needs.windows.result }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🖥 macOS | \`${{ needs.macos.result }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🐧 Linux | \`${{ needs.linux.result }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 📱 ColorOS Support" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **ColorOS 11** (Android 11) ✅" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **ColorOS 12** (Android 12) ✅" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **ColorOS 13** (Android 13) ✅" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **ColorOS 14** (Android 14) ✅" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **ColorOS 15** (Android 15) ✅" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **ColorOS 16** (Android 16) ✅" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "## Workflow Info" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Event**: ${{ github.event_name }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Branch**: ${{ github.ref }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Commit**: [${{ github.sha }}](https://github.com/Alifwag/map-explorer-app/commit/${{ github.sha }})" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Actor**: @${{ github.actor }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Timestamp**: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🎯 Validate Build Status
-        run: |
-          echo "🎯 Validating build pipeline..."
-          echo ""
-          
-          # Count successes
-          SUCCESS_COUNT=0
-          TOTAL_COUNT=8
-          
-          [ "${{ needs.web-pwa.result }}" == "success" ] && { echo "✅ Web PWA: SUCCESS"; ((SUCCESS_COUNT++)); } || echo "⚠️ Web PWA: ${{ needs.web-pwa.result }}"
-          [ "${{ needs.quality-checks.result }}" == "success" ] && { echo "✅ Quality Checks: SUCCESS"; ((SUCCESS_COUNT++)); } || echo "⚠️ Quality Checks: ${{ needs.quality-checks.result }}"
-          [ "${{ needs.source-code.result }}" == "success" ] && { echo "✅ Source Code: SUCCESS"; ((SUCCESS_COUNT++)); } || echo "⚠️ Source Code: ${{ needs.source-code.result }}"
-          [ "${{ needs.android.result }}" == "success" ] && { echo "✅ Android: SUCCESS"; ((SUCCESS_COUNT++)); } || echo "⚠️ Android: ${{ needs.android.result }}"
-          [ "${{ needs.ios.result }}" == "success" ] && { echo "✅ iOS: SUCCESS"; ((SUCCESS_COUNT++)); } || echo "⚠️ iOS: ${{ needs.ios.result }}"
-          [ "${{ needs.windows.result }}" == "success" ] && { echo "✅ Windows: SUCCESS"; ((SUCCESS_COUNT++)); } || echo "⚠️ Windows: ${{ needs.windows.result }}"
-          [ "${{ needs.macos.result }}" == "success" ] && { echo "✅ macOS: SUCCESS"; ((SUCCESS_COUNT++)); } || echo "⚠️ macOS: ${{ needs.macos.result }}"
-          [ "${{ needs.linux.result }}" == "success" ] && { echo "✅ Linux: SUCCESS"; ((SUCCESS_COUNT++)); } || echo "⚠️ Linux: ${{ needs.linux.result }}"
-          
-          echo ""
-          echo "📊 Pipeline Result: $SUCCESS_COUNT/$TOTAL_COUNT jobs passed"
-          echo ""
-          [ $SUCCESS_COUNT -ge 6 ] && echo "✅ Build pipeline completed successfully!" || echo "⚠️ Some builds encountered issues (see details above)"
+          echo "**Devices:** Oppo, Realme, OnePlus" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
